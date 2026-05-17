@@ -14,6 +14,7 @@ export function buildApp(options: FastifyServerOptions = {}) {
   });
 
   app.get('/health', async () => {
+    throw new Error('Simulated error for testing');
     return {
       status: 'ok'
     };
