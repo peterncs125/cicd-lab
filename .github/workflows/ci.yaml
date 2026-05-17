@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['22', '24'] # test against multiple Node.js versions
+    steps:
+      - name: Checkout # checkout the code at the current commit
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js # setup the Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm # cache node_modules based on package-lock.json
+
+      - name: Install dependencies
+        run: npm ci # install dependencies based on package-lock.json for reproducible builds
+
+      # Core checks
+      - name: Type check
+        run: npm run typecheck # run TypeScript type checking
+
+      - name: Format check
+        run: npm run format:check # check code formatting with Prettier
+
+      - name: Test
+        run: npm test # run tests with vitest
+
+      - name: Compute image tag # compute the Docker image tag based on the branch name or commit SHA
+        id: meta
+        run: |
+          BRANCH_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
+
+          if [[ "$BRANCH_NAME" == release/* ]]; then
+            VERSION="${BRANCH_NAME#release/}"
+            IMAGE_TAG="release-${VERSION}"
+          else
+            IMAGE_TAG="sha-${GITHUB_SHA::7}"
+          fi
+
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Print image metadata # print the computed image tag and branch name for debugging purposes
+        run: |
+          echo "Node version: ${{ matrix.node-version }}"
+          echo "Branch: ${{ steps.meta.outputs.branch_name }}"
+          echo "Image tag: ${{ steps.meta.outputs.image_tag }}"
+
+      - name: Build Docker image # only build the Docker image for Node.js 24 to avoid redundant builds in the CI matrix
+        if: ${{ matrix.node-version == '24' }}
+        run: docker build -t my-app:${{ steps.meta.outputs.image_tag }} .
+
+  cd: # trigger the CD workflow for release branches after successful CI
+    if: ${{ startsWith(github.ref, 'refs/heads/release/') }}
+    needs: ci
+    uses: ./.github/workflows/cd.yaml
